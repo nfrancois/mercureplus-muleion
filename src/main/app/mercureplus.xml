@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:https="http://www.mulesoft.org/schema/mule/https" xmlns:twitter="http://www.mulesoft.org/schema/mule/twitter" xmlns:quartz="http://www.mulesoft.org/schema/mule/quartz" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:spring="http://www.springframework.org/schema/beans" xmlns:core="http://www.mulesoft.org/schema/mule/core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/https http://www.mulesoft.org/schema/mule/https/3.2/mule-https.xsd
+http://www.mulesoft.org/schema/mule/twitter http://www.mulesoft.org/schema/mule/twitter/2.3/mule-twitter.xsd 
+http://www.mulesoft.org/schema/mule/twitter http://www.mulesoft.org/schema/mule/twitter/3.1/mule-twitter.xsd
+http://www.mulesoft.org/schema/mule/quartz http://www.mulesoft.org/schema/mule/quartz/3.2/mule-quartz.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/3.2/mule-json.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd 
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/3.2/mule.xsd">
+
+    <json:json-to-object-transformer  name="activityFeedTransformer" returnClass="nfrancois.mercureplus.model.gplus.ActivityFeed" doc:name="JsonToGPLusObject" doc:description="Transforme le json en grappe d'objets"/>
+    <spring:beans>  
+        <spring:bean id="mongoDBService" class="nfrancois.mercureplus.component.MongoDBService"> 
+            <spring:property name="host" value="${mongodb.host}"/>  
+            <spring:property name="port" value="${mongodb.port}"/>  
+            <spring:property name="user" value="${mongodb.user}"/>  
+            <spring:property name="password" value="${mongodb.password}"/>  
+            <spring:property name="database" value="${mongodb.db}"/> 
+        </spring:bean> 
+        <spring:bean id="restTemplate" class ="org.springframework.web.client.RestTemplate"/> 
+        <spring:bean id="gPLusResponseComponent" class="nfrancois.mercureplus.component.GPLusResponseComponent"> 
+            <spring:property name="mongoDBService" ref="mongoDBService"/> 
+        </spring:bean>
+        <spring:bean id="activityToMessageComponent" class="nfrancois.mercureplus.component.ActivityToMessageComponent">
+        	<spring:property name="restTemplate" ref="restTemplate"/>
+        </spring:bean>
+        <spring:bean id="tweetMessageComponent" class="nfrancois.mercureplus.component.TweetMessageComponent"/>
+    </spring:beans>
+    
+    <twitter:config name="twitterConfig" consumerKey="${twitter.consumerKey}" consumerSecret="${twitter.consumerSecret}" 
+    	accessKey="${twitter.oauthToken}" accessSecret="${twitter.oauthSecret}"	doc:name="Twitter Configuration" doc:description="Global Twitter configuration information"/>
+    
+    <flow name="mercureplusflow" doc:name="mercureplusflow">
+        <quartz:inbound-endpoint jobName="googleplusresquest" repeatInterval="${delay}" doc:name="Déclencheur Quartz" doc:description="Déclechement régulier du début de scénario">
+            <quartz:event-generator-job/>
+        </quartz:inbound-endpoint>
+        <https:outbound-endpoint responseTransformer-refs="activityFeedTransformer" method="GET" address="https://www.googleapis.com/plus/v1/people/${me}/activities/public?key=${key.gplus}"  doc:name="GPlus Request" doc:description="Send a post request to Google+"/>
+        <component doc:name="Google+ Response" doc:description="Receive the GPlus request response, extract new and synchronize">  
+            <spring-object bean="gPLusResponseComponent"/> 
+        </component>
+        <collection-splitter enableCorrelation="IF_NOT_SET" doc:name="Activity splitter" doc:description="Splitte la liste d'activities"></collection-splitter>
+        <async doc:description="Traitement activity par activity">
+	        <component doc:name="Transforme en message générique" doc:description="Extrait le message et shortenise l'url">
+	        	<spring-object bean="activityToMessageComponent"/>
+	        </component>
+	        <component doc:name="Prépare le tweet" doc:description="Transforme le message avec ses contraintes twitter">
+	        	<spring-object bean="tweetMessageComponent"/>
+	        </component>
+	        <twitter:update-status config-ref="twitterConfig" status="#[payload]" doc:name="Tweet le message" doc:description="Interact with Twitter"/>
+		</async>
+    </flow>
+</mule>
